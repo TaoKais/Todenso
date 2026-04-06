@@ -100,7 +100,7 @@
 
               <div class="canvas-controls">
                 <button type="button" id="clear-canvas" class="secondary">Clear canvas</button>
-                <span>Draw directly on the canvas and save the sketch as JSON points.</span>
+                <span>Draw directly on the canvas with a softer paint-style brush and save it to the private archive.</span>
               </div>
 
               <canvas id="enso-canvas" width="1000" height="520" aria-label="ENSO drawing canvas"></canvas>
@@ -147,8 +147,39 @@
       if (canvas && payloadInput) {
         const ctx = canvas.getContext("2d");
         let drawing = false;
-        let paths = [];
-        let activePath = null;
+        let strokes = [];
+        let activeStroke = null;
+        let lastPoint = null;
+
+        const BRUSH_COLOR = { r: 15, g: 118, b: 110 };
+        const BRUSH_BASE = 10;
+
+        function color(alpha) {
+          return `rgba(${BRUSH_COLOR.r}, ${BRUSH_COLOR.g}, ${BRUSH_COLOR.b}, ${alpha})`;
+        }
+
+        function normalizeStroke(entry) {
+          if (entry && Array.isArray(entry.points)) {
+            return {
+              points: entry.points,
+              splatters: Array.isArray(entry.splatters) ? entry.splatters : [],
+            };
+          }
+
+          if (Array.isArray(entry)) {
+            return {
+              points: entry.map((point) => ({
+                x: point.x,
+                y: point.y,
+                size: point.size || 5,
+                alpha: point.alpha || 0.22,
+              })),
+              splatters: [],
+            };
+          }
+
+          return { points: [], splatters: [] };
+        }
 
         function drawBackdrop() {
           ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -173,27 +204,65 @@
           }
         }
 
-        function redraw() {
-          drawBackdrop();
-          ctx.strokeStyle = "#0f766e";
-          ctx.lineWidth = 3;
-          ctx.lineCap = "round";
-          ctx.lineJoin = "round";
+        function stampPoint(point) {
+          const radius = Math.max(1.2, point.size);
 
-          paths.forEach((path) => {
-            if (!path.length) {
+          ctx.fillStyle = color(Math.min(0.34, point.alpha + 0.06));
+          ctx.beginPath();
+          ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.fillStyle = color(point.alpha);
+          ctx.beginPath();
+          ctx.arc(point.x + radius * 0.18, point.y - radius * 0.12, radius * 0.62, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        function drawStroke(stroke) {
+          if (!stroke.points.length) {
+            return;
+          }
+
+          stroke.points.forEach((point, index) => {
+            stampPoint(point);
+
+            if (index === 0) {
               return;
             }
 
-            ctx.beginPath();
-            ctx.moveTo(path[0].x, path[0].y);
-            for (let i = 1; i < path.length; i += 1) {
-              ctx.lineTo(path[i].x, path[i].y);
+            const previous = stroke.points[index - 1];
+            const dx = point.x - previous.x;
+            const dy = point.y - previous.y;
+            const distance = Math.max(1, Math.hypot(dx, dy));
+            const steps = Math.max(1, Math.ceil(distance / 2));
+
+            for (let step = 1; step < steps; step += 1) {
+              const ratio = step / steps;
+              stampPoint({
+                x: previous.x + dx * ratio,
+                y: previous.y + dy * ratio,
+                size: previous.size + (point.size - previous.size) * ratio,
+                alpha: previous.alpha + (point.alpha - previous.alpha) * ratio,
+              });
             }
-            ctx.stroke();
           });
 
-          payloadInput.value = JSON.stringify(paths);
+          stroke.splatters.forEach((splash) => {
+            ctx.fillStyle = color(splash.alpha);
+            ctx.beginPath();
+            ctx.arc(splash.x, splash.y, splash.size, 0, Math.PI * 2);
+            ctx.fill();
+          });
+        }
+
+        function redraw() {
+          drawBackdrop();
+
+          strokes.forEach((stroke) => {
+            drawStroke(normalizeStroke(stroke));
+          });
+
+          payloadInput.value = JSON.stringify(strokes);
         }
 
         function getPoint(event) {
@@ -204,31 +273,80 @@
           };
         }
 
+        function buildBrushPoint(point, previousPoint) {
+          const distance = previousPoint ? Math.hypot(point.x - previousPoint.x, point.y - previousPoint.y) : 0;
+          const speedFactor = Math.max(0, Math.min(1, distance / 18));
+          const size = BRUSH_BASE - speedFactor * 4 + Math.random() * 1.4;
+          const alpha = 0.1 + (1 - speedFactor) * 0.18;
+
+          return {
+            x: point.x,
+            y: point.y,
+            size: Number(size.toFixed(2)),
+            alpha: Number(alpha.toFixed(3)),
+          };
+        }
+
+        function maybeAddSplatter(stroke, point, previousPoint) {
+          if (!previousPoint) {
+            return;
+          }
+
+          const distance = Math.hypot(point.x - previousPoint.x, point.y - previousPoint.y);
+          if (distance < 10 || Math.random() > 0.34) {
+            return;
+          }
+
+          const count = 1 + Math.floor(Math.random() * 3);
+
+          for (let index = 0; index < count; index += 1) {
+            const angle = Math.random() * Math.PI * 2;
+            const spread = 5 + Math.random() * Math.min(28, distance);
+            stroke.splatters.push({
+              x: Number((point.x + Math.cos(angle) * spread).toFixed(2)),
+              y: Number((point.y + Math.sin(angle) * spread).toFixed(2)),
+              size: Number((0.8 + Math.random() * 2.8).toFixed(2)),
+              alpha: Number((0.05 + Math.random() * 0.12).toFixed(3)),
+            });
+          }
+        }
+
         canvas.addEventListener("pointerdown", (event) => {
+          canvas.setPointerCapture(event.pointerId);
           drawing = true;
-          activePath = [getPoint(event)];
-          paths.push(activePath);
+          const point = getPoint(event);
+          activeStroke = { points: [], splatters: [] };
+          strokes.push(activeStroke);
+          const brushPoint = buildBrushPoint(point, null);
+          activeStroke.points.push(brushPoint);
+          lastPoint = point;
           redraw();
         });
 
         canvas.addEventListener("pointermove", (event) => {
-          if (!drawing || !activePath) {
+          if (!drawing || !activeStroke) {
             return;
           }
 
-          activePath.push(getPoint(event));
+          const point = getPoint(event);
+          const previousPoint = lastPoint;
+          const brushPoint = buildBrushPoint(point, previousPoint);
+          activeStroke.points.push(brushPoint);
+          maybeAddSplatter(activeStroke, point, previousPoint);
+          lastPoint = point;
           redraw();
         });
 
         ["pointerup", "pointerleave"].forEach((eventName) => {
           canvas.addEventListener(eventName, () => {
             drawing = false;
-            activePath = null;
+            activeStroke = null;
+            lastPoint = null;
           });
         });
 
         document.getElementById("clear-canvas")?.addEventListener("click", () => {
-          paths = [];
+          strokes = [];
           redraw();
         });
 
@@ -239,7 +357,7 @@
             if (!stored) {
               return;
             }
-            paths = JSON.parse(stored);
+            strokes = JSON.parse(stored).map((entry) => normalizeStroke(entry));
             redraw();
           });
         });
