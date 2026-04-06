@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Todenso</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Todenso</p>
+          <h1>Private ENSO sketch archive for local research work.</h1>
+          <p class="hero-copy">
+            Create users, keep their sketches private, and store historical ENSO drawings on your own machine.
+          </p>
+        </div>
+      </header>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <section class="flash-stack">
+            {% for category, message in messages %}
+              <div class="flash flash-{{ category }}">{{ message }}</div>
+            {% endfor %}
+          </section>
+        {% endif %}
+      {% endwith %}
+
+      <main class="layout">
+        <section class="panel">
+          <h2>Create user</h2>
+          <form method="post" action="{{ url_for('create_user') }}" class="form-grid">
+            <label>
+              <span>Full name</span>
+              <input type="text" name="full_name" required />
+            </label>
+            <label>
+              <span>Username</span>
+              <input type="text" name="username" required />
+            </label>
+            <label>
+              <span>Password</span>
+              <input type="password" name="password" required />
+            </label>
+            <button type="submit">Create user</button>
+          </form>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <h2>Users</h2>
+            <span>{{ users|length }} saved</span>
+          </div>
+          <div class="user-list">
+            {% for user in users %}
+              <a class="user-card {% if selected_user and selected_user['id'] == user['id'] %}selected{% endif %}" href="{{ url_for('index', user_id=user['id']) }}">
+                <strong>{{ user["full_name"] }}</strong>
+                <span>@{{ user["username"] }}</span>
+                <small>Created {{ user["created_at"] }}</small>
+              </a>
+            {% else %}
+              <p class="empty-state">No users yet.</p>
+            {% endfor %}
+          </div>
+        </section>
+
+        <section class="panel panel-wide">
+          <div class="section-head">
+            <div>
+              <h2>ENSO drawing studio</h2>
+              {% if selected_user %}
+                <p>Saving private drawings for <strong>{{ selected_user["full_name"] }}</strong>.</p>
+              {% else %}
+                <p>Select a user first to load the private drawing archive.</p>
+              {% endif %}
+            </div>
+          </div>
+
+          {% if selected_user %}
+            <form method="post" action="{{ url_for('create_drawing') }}" id="drawing-form" class="drawing-form">
+              <input type="hidden" name="user_id" value="{{ selected_user['id'] }}" />
+              <input type="hidden" name="drawing_payload" id="drawing-payload" />
+
+              <div class="toolbar">
+                <label>
+                  <span>Title</span>
+                  <input type="text" name="title" required placeholder="ENSO reconstruction, anomaly path, ..." />
+                </label>
+                <label>
+                  <span>Password</span>
+                  <input type="password" name="password" required placeholder="User password to save" />
+                </label>
+                <label class="toolbar-notes">
+                  <span>Notes</span>
+                  <textarea name="notes" rows="3" placeholder="What this sketch captures, period covered, assumptions..."></textarea>
+                </label>
+              </div>
+
+              <div class="canvas-controls">
+                <button type="button" id="clear-canvas" class="secondary">Clear canvas</button>
+                <span>Draw directly on the canvas and save the sketch as JSON points.</span>
+              </div>
+
+              <canvas id="enso-canvas" width="1000" height="520" aria-label="ENSO drawing canvas"></canvas>
+
+              <button type="submit">Save private drawing</button>
+            </form>
+
+            <div class="archive">
+              <div class="section-head">
+                <h3>Private history</h3>
+                <span>{{ drawings|length }} drawings</span>
+              </div>
+              <div class="drawing-list">
+                {% for drawing in drawings %}
+                  <article class="drawing-card" data-drawing='{{ drawing["drawing"]|tojson|safe }}'>
+                    <div class="drawing-card-head">
+                      <div>
+                        <h4>{{ drawing["title"] }}</h4>
+                        <small>Updated {{ drawing["updated_at"] }}</small>
+                      </div>
+                      <button type="button" class="secondary load-drawing">Load</button>
+                    </div>
+                    {% if drawing["notes"] %}
+                      <p>{{ drawing["notes"] }}</p>
+                    {% endif %}
+                    <pre>{{ drawing["drawing"]|tojson(indent=2) }}</pre>
+                  </article>
+                {% else %}
+                  <p class="empty-state">No private drawings saved for this user yet.</p>
+                {% endfor %}
+              </div>
+            </div>
+          {% else %}
+            <div class="empty-state large">Choose a user to begin drawing and viewing their private ENSO history.</div>
+          {% endif %}
+        </section>
+      </main>
+    </div>
+
+    <script>
+      const canvas = document.getElementById("enso-canvas");
+      const payloadInput = document.getElementById("drawing-payload");
+
+      if (canvas && payloadInput) {
+        const ctx = canvas.getContext("2d");
+        let drawing = false;
+        let paths = [];
+        let activePath = null;
+
+        function drawBackdrop() {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.fillStyle = "#f8efe2";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+          ctx.strokeStyle = "rgba(17, 24, 39, 0.12)";
+          ctx.lineWidth = 1;
+
+          for (let x = 0; x <= canvas.width; x += 50) {
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, canvas.height);
+            ctx.stroke();
+          }
+
+          for (let y = 0; y <= canvas.height; y += 50) {
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(canvas.width, y);
+            ctx.stroke();
+          }
+        }
+
+        function redraw() {
+          drawBackdrop();
+          ctx.strokeStyle = "#0f766e";
+          ctx.lineWidth = 3;
+          ctx.lineCap = "round";
+          ctx.lineJoin = "round";
+
+          paths.forEach((path) => {
+            if (!path.length) {
+              return;
+            }
+
+            ctx.beginPath();
+            ctx.moveTo(path[0].x, path[0].y);
+            for (let i = 1; i < path.length; i += 1) {
+              ctx.lineTo(path[i].x, path[i].y);
+            }
+            ctx.stroke();
+          });
+
+          payloadInput.value = JSON.stringify(paths);
+        }
+
+        function getPoint(event) {
+          const rect = canvas.getBoundingClientRect();
+          return {
+            x: Math.round((event.clientX - rect.left) * (canvas.width / rect.width)),
+            y: Math.round((event.clientY - rect.top) * (canvas.height / rect.height)),
+          };
+        }
+
+        canvas.addEventListener("pointerdown", (event) => {
+          drawing = true;
+          activePath = [getPoint(event)];
+          paths.push(activePath);
+          redraw();
+        });
+
+        canvas.addEventListener("pointermove", (event) => {
+          if (!drawing || !activePath) {
+            return;
+          }
+
+          activePath.push(getPoint(event));
+          redraw();
+        });
+
+        ["pointerup", "pointerleave"].forEach((eventName) => {
+          canvas.addEventListener(eventName, () => {
+            drawing = false;
+            activePath = null;
+          });
+        });
+
+        document.getElementById("clear-canvas")?.addEventListener("click", () => {
+          paths = [];
+          redraw();
+        });
+
+        document.querySelectorAll(".load-drawing").forEach((button) => {
+          button.addEventListener("click", (event) => {
+            const card = event.currentTarget.closest(".drawing-card");
+            const stored = card?.dataset.drawing;
+            if (!stored) {
+              return;
+            }
+            paths = JSON.parse(stored);
+            redraw();
+          });
+        });
+
+        redraw();
+      }
+    </script>
+  </body>
+</html>

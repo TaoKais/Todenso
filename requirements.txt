@@ -1,24 +1,2 @@
-﻿# Todenso
-
-Todenso is a local web app for creating user accounts and saving each user's private historical ENSO drawings.
-
-## Run (Windows PowerShell)
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-python .\app.py
-
-
-# =========================
-# Todenso scaffold (PowerShell)
-# =========================
-Set-Location C:\Users\Kdt_T\Todenso
-
-New-Item -ItemType Directory -Force -Path templates | Out-Null
-New-Item -ItemType Directory -Force -Path static | Out-Null
-New-Item -ItemType Directory -Force -Path data | Out-Null
-
-@'
 Flask==3.0.3
 Werkzeug==3.0.3
