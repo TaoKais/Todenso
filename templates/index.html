@@ -100,7 +100,7 @@
 
               <div class="canvas-controls">
                 <button type="button" id="clear-canvas" class="secondary">Clear canvas</button>
-                <span>Draw directly on the canvas with a softer paint-style brush and save it to the private archive.</span>
+                <span>Draw with a sumi-style enso brush: dark ink, dry-brush texture, and a more natural calligraphy trail.</span>
               </div>
 
               <canvas id="enso-canvas" width="1000" height="520" aria-label="ENSO drawing canvas"></canvas>
@@ -151,8 +151,8 @@
         let activeStroke = null;
         let lastPoint = null;
 
-        const BRUSH_COLOR = { r: 15, g: 118, b: 110 };
-        const BRUSH_BASE = 10;
+        const BRUSH_COLOR = { r: 24, g: 19, b: 16 };
+        const BRUSH_BASE = 22;
 
         function color(alpha) {
           return `rgba(${BRUSH_COLOR.r}, ${BRUSH_COLOR.g}, ${BRUSH_COLOR.b}, ${alpha})`;
@@ -162,7 +162,7 @@
           if (entry && Array.isArray(entry.points)) {
             return {
               points: entry.points,
-              splatters: Array.isArray(entry.splatters) ? entry.splatters : [],
+              dryMarks: Array.isArray(entry.dryMarks) ? entry.dryMarks : [],
             };
           }
 
@@ -174,11 +174,11 @@
                 size: point.size || 5,
                 alpha: point.alpha || 0.22,
               })),
-              splatters: [],
+              dryMarks: [],
             };
           }
 
-          return { points: [], splatters: [] };
+          return { points: [], dryMarks: [] };
         }
 
         function drawBackdrop() {
@@ -204,18 +204,34 @@
           }
         }
 
-        function stampPoint(point) {
-          const radius = Math.max(1.2, point.size);
+        function stampBrush(point, angle) {
+          const radius = Math.max(1.4, point.size);
+          const bristleCount = Math.max(5, Math.floor(radius * 0.9));
+          const perpendicular = angle + Math.PI / 2;
 
-          ctx.fillStyle = color(Math.min(0.34, point.alpha + 0.06));
-          ctx.beginPath();
-          ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
-          ctx.fill();
+          for (let index = 0; index < bristleCount; index += 1) {
+            const spreadRatio = bristleCount === 1 ? 0 : index / (bristleCount - 1) - 0.5;
+            const offset = spreadRatio * radius * 1.25;
+            const density = 1 - Math.abs(spreadRatio) * 0.7;
 
-          ctx.fillStyle = color(point.alpha);
-          ctx.beginPath();
-          ctx.arc(point.x + radius * 0.18, point.y - radius * 0.12, radius * 0.62, 0, Math.PI * 2);
-          ctx.fill();
+            if (Math.random() > density * 0.92) {
+              continue;
+            }
+
+            const x = point.x + Math.cos(perpendicular) * offset;
+            const y = point.y + Math.sin(perpendicular) * offset;
+            const width = Math.max(0.8, radius * (0.12 + Math.random() * 0.08));
+            const height = Math.max(1.5, radius * (0.9 + Math.random() * 0.55));
+
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.rotate(angle + (Math.random() - 0.5) * 0.12);
+            ctx.fillStyle = color(point.alpha * (0.55 + density * 0.55));
+            ctx.beginPath();
+            ctx.ellipse(0, 0, width, height, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+          }
         }
 
         function drawStroke(stroke) {
@@ -224,33 +240,38 @@
           }
 
           stroke.points.forEach((point, index) => {
-            stampPoint(point);
+            const previous = stroke.points[Math.max(0, index - 1)];
+            const next = stroke.points[Math.min(stroke.points.length - 1, index + 1)];
+            const angle = Math.atan2(next.y - previous.y, next.x - previous.x || 0.0001);
 
-            if (index === 0) {
-              return;
-            }
+            stampBrush(point, angle);
 
-            const previous = stroke.points[index - 1];
-            const dx = point.x - previous.x;
-            const dy = point.y - previous.y;
-            const distance = Math.max(1, Math.hypot(dx, dy));
-            const steps = Math.max(1, Math.ceil(distance / 2));
+            if (index > 0) {
+              const segmentStart = stroke.points[index - 1];
+              const dx = point.x - segmentStart.x;
+              const dy = point.y - segmentStart.y;
+              const distance = Math.max(1, Math.hypot(dx, dy));
+              const steps = Math.max(1, Math.ceil(distance / 1.5));
 
-            for (let step = 1; step < steps; step += 1) {
-              const ratio = step / steps;
-              stampPoint({
-                x: previous.x + dx * ratio,
-                y: previous.y + dy * ratio,
-                size: previous.size + (point.size - previous.size) * ratio,
-                alpha: previous.alpha + (point.alpha - previous.alpha) * ratio,
-              });
+              for (let step = 1; step < steps; step += 1) {
+                const ratio = step / steps;
+                stampBrush(
+                  {
+                    x: segmentStart.x + dx * ratio,
+                    y: segmentStart.y + dy * ratio,
+                    size: segmentStart.size + (point.size - segmentStart.size) * ratio,
+                    alpha: segmentStart.alpha + (point.alpha - segmentStart.alpha) * ratio,
+                  },
+                  angle
+                );
+              }
             }
           });
 
-          stroke.splatters.forEach((splash) => {
-            ctx.fillStyle = color(splash.alpha);
+          stroke.dryMarks.forEach((mark) => {
+            ctx.fillStyle = color(mark.alpha);
             ctx.beginPath();
-            ctx.arc(splash.x, splash.y, splash.size, 0, Math.PI * 2);
+            ctx.ellipse(mark.x, mark.y, mark.width, mark.height, mark.rotation, 0, Math.PI * 2);
             ctx.fill();
           });
         }
@@ -275,9 +296,9 @@
 
         function buildBrushPoint(point, previousPoint) {
           const distance = previousPoint ? Math.hypot(point.x - previousPoint.x, point.y - previousPoint.y) : 0;
-          const speedFactor = Math.max(0, Math.min(1, distance / 18));
-          const size = BRUSH_BASE - speedFactor * 4 + Math.random() * 1.4;
-          const alpha = 0.1 + (1 - speedFactor) * 0.18;
+          const speedFactor = Math.max(0, Math.min(1, distance / 26));
+          const size = BRUSH_BASE - speedFactor * 7 + Math.random() * 1.8;
+          const alpha = 0.09 + (1 - speedFactor) * 0.22;
 
           return {
             x: point.x,
@@ -287,26 +308,29 @@
           };
         }
 
-        function maybeAddSplatter(stroke, point, previousPoint) {
+        function maybeAddDryBrush(stroke, point, previousPoint) {
           if (!previousPoint) {
             return;
           }
 
           const distance = Math.hypot(point.x - previousPoint.x, point.y - previousPoint.y);
-          if (distance < 10 || Math.random() > 0.34) {
+          if (distance < 6 || Math.random() > 0.48) {
             return;
           }
 
-          const count = 1 + Math.floor(Math.random() * 3);
+          const angle = Math.atan2(point.y - previousPoint.y, point.x - previousPoint.x);
+          const perpendicular = angle + Math.PI / 2;
+          const count = 1 + Math.floor(Math.random() * 2);
 
           for (let index = 0; index < count; index += 1) {
-            const angle = Math.random() * Math.PI * 2;
-            const spread = 5 + Math.random() * Math.min(28, distance);
-            stroke.splatters.push({
-              x: Number((point.x + Math.cos(angle) * spread).toFixed(2)),
-              y: Number((point.y + Math.sin(angle) * spread).toFixed(2)),
-              size: Number((0.8 + Math.random() * 2.8).toFixed(2)),
-              alpha: Number((0.05 + Math.random() * 0.12).toFixed(3)),
+            const spread = (Math.random() - 0.5) * 16;
+            stroke.dryMarks.push({
+              x: Number((point.x + Math.cos(perpendicular) * spread).toFixed(2)),
+              y: Number((point.y + Math.sin(perpendicular) * spread).toFixed(2)),
+              width: Number((1.4 + Math.random() * 2.6).toFixed(2)),
+              height: Number((0.7 + Math.random() * 1.6).toFixed(2)),
+              rotation: Number((angle + (Math.random() - 0.5) * 0.4).toFixed(3)),
+              alpha: Number((0.025 + Math.random() * 0.05).toFixed(3)),
             });
           }
         }
@@ -315,7 +339,7 @@
           canvas.setPointerCapture(event.pointerId);
           drawing = true;
           const point = getPoint(event);
-          activeStroke = { points: [], splatters: [] };
+          activeStroke = { points: [], dryMarks: [] };
           strokes.push(activeStroke);
           const brushPoint = buildBrushPoint(point, null);
           activeStroke.points.push(brushPoint);
@@ -332,7 +356,7 @@
           const previousPoint = lastPoint;
           const brushPoint = buildBrushPoint(point, previousPoint);
           activeStroke.points.push(brushPoint);
-          maybeAddSplatter(activeStroke, point, previousPoint);
+          maybeAddDryBrush(activeStroke, point, previousPoint);
           lastPoint = point;
           redraw();
         });
